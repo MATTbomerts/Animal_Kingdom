@@ -46,24 +46,24 @@ parser.add_argument('--model_name', type=str, default='vslnet', help='model name
 parser.add_argument('--suffix', type=str, default=None, help='set to the last `_xxx` in ckpt repo to eval results')
 
 
-##############################################
-#第一步：分布式训练加速
-parser.add_argument("--local_rank", help="local device id on current node",
-                    type=int)
-##############################################
+# ##############################################
+# #第一步：分布式训练加速
+# parser.add_argument("--local_rank", help="local device id on current node",
+#                     type=int)
+# ##############################################
 
 configs = parser.parse_args()
 
-local_rank=configs.local_rank
+# local_rank=configs.local_rank
 
 
-#第2步，初始化分布式环境
-#######################################################################################
-#word_size表示当前结点有多少GPU卡,local_rank表示当前进程运行在哪台设备上
-n_gpus = 4  #所以world_size和nproc_per_node参数需要设置的一样
-torch.distributed.init_process_group("nccl", world_size=n_gpus, rank=configs.local_rank)
-torch.cuda.set_device(configs.local_rank)
-#######################################################################################
+# #第2步，初始化分布式环境
+# #######################################################################################
+# #word_size表示当前结点有多少GPU卡,local_rank表示当前进程运行在哪台设备上
+# n_gpus = 4  #所以world_size和nproc_per_node参数需要设置的一样
+# torch.distributed.init_process_group("nccl", world_size=n_gpus, rank=configs.local_rank)
+# torch.cuda.set_device(configs.local_rank)
+# #######################################################################################
 
 
 # set tensorflow configs
@@ -102,16 +102,8 @@ if configs.mode.lower() == 'train':
     eval_period = num_train_batches // 2
     save_json(vars(configs), os.path.join(model_dir, 'configs.json'), sort_keys=True, save_pretty=True)
     # build model
-    # model = VSLNet(configs=configs, word_vectors=dataset['word_vector']).to(device)
+    model = VSLNet(configs=configs, word_vectors=dataset['word_vector']).to(device)
 
-    #分布式加载模型
-    model = VSLNet(configs=configs, word_vectors=dataset['word_vector'])
-    model = nn.parallel.DistributedDataParallel(model.cuda(local_rank), device_ids=[local_rank]) # 模型拷贝，放入DistributedDataParallel
-    
-    # model = VSLNet(configs=configs, word_vectors=dataset['word_vector'])
-    # #代码在下一行不再继续运行(可能 1:执行速度过慢；2：其他线程阻塞 3：操作死锁 )
-    # model.to("cuda:5")
-    # model=model.to(device)
     optimizer, scheduler = build_optimizer_and_scheduler(model, configs=configs)
     # start training
     best_r1i7 = -1.0
@@ -127,20 +119,14 @@ if configs.mode.lower() == 'train':
             global_step += 1
             _, vfeats, vfeat_lens, word_ids, char_ids, s_labels, e_labels, h_labels = data
             # prepare features
-            # vfeats, vfeat_lens = vfeats.to(device), vfeat_lens.to(device)
-            # word_ids, char_ids = word_ids.to(device), char_ids.to(device)
-            # s_labels, e_labels, h_labels = s_labels.to(device), e_labels.to(device), h_labels.to(device)
-            # # generate mask
-            # query_mask = (torch.zeros_like(word_ids) != word_ids).float().to(device)
-            # video_mask = convert_length_to_mask(vfeat_lens).to(device)
-
-
-            vfeats, vfeat_lens = vfeats.cuda(local_rank) , vfeat_lens.cuda(local_rank) 
-            word_ids, char_ids = word_ids.cuda(local_rank) , char_ids.cuda(local_rank) 
-            s_labels, e_labels, h_labels = s_labels.cuda(local_rank) , e_labels.cuda(local_rank) , h_labels.cuda(local_rank) 
+            vfeats, vfeat_lens = vfeats.to(device), vfeat_lens.to(device)
+            word_ids, char_ids = word_ids.to(device), char_ids.to(device)
+            s_labels, e_labels, h_labels = s_labels.to(device), e_labels.to(device), h_labels.to(device)
             # generate mask
-            query_mask = (torch.zeros_like(word_ids) != word_ids).float().cuda(local_rank) 
-            video_mask = convert_length_to_mask(vfeat_lens).cuda(local_rank) 
+            query_mask = (torch.zeros_like(word_ids) != word_ids).float().to(device)
+            video_mask = convert_length_to_mask(vfeat_lens).to(device)
+
+
             # compute logits
             h_score, start_logits, end_logits = model(word_ids, char_ids, vfeats, video_mask, query_mask)
             # compute loss
@@ -164,7 +150,7 @@ if configs.mode.lower() == 'train':
                 score_writer.flush()
                 if r1i7 >= best_r1i7:
                     best_r1i7 = r1i7
-                    torch.save(model.module.state_dict(), os.path.join(model_dir, '{}_{}.t7'.format(configs.model_name,
+                    torch.save(model.state_dict(), os.path.join(model_dir, '{}_{}.t7'.format(configs.model_name,
                                                                                              global_step)))
                     # only keep the top-3 model checkpoints
                     filter_checkpoints(model_dir, suffix='t7', max_to_keep=3)
